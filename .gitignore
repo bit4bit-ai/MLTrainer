@@ -1,0 +1,29 @@
+# Environments & Caches
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+.env.local
+
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime Storage & Datasets
+data/
+temp_downloads/
+exports/*.zip
+checkpoints/*.pth
+checkpoints/*.json
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

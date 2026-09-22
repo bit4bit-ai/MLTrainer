@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+Thumbs.db
+temp_downloads
+node_modules
+frontend/node_modules
+exports/*.zip
+checkpoints/*.pth
