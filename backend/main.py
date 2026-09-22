@@ -279,6 +279,14 @@ def get_evaluation(task: str):
         raise HTTPException(status_code=400, detail="Invalid task")
     return evaluator.get_evaluation_metrics(task)
 
+@app.post("/api/evaluation/{task}/infer")
+async def run_evaluation_inference(task: str, file: UploadFile = File(...)):
+    if task not in SUPPORTED_TASKS:
+        raise HTTPException(status_code=400, detail="Invalid task")
+    contents = await file.read()
+    result = evaluator.run_inference(task, contents, file.filename)
+    return result
+
 # ==================== EXPORT ENDPOINTS ====================
 @app.get("/api/export/code/{task}")
 def get_inference_code(task: str, format: str = "onnx"):

@@ -149,6 +149,20 @@ export async function fetchEvaluation(task: string): Promise<EvaluationData> {
   return res.json();
 }
 
+export async function runInference(task: string, file: File): Promise<any> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch(`${API_BASE}/evaluation/${task}/infer`, {
+    method: 'POST',
+    body: formData
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Inference failed: ${errText || res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function fetchInferenceCode(task: string, format: string = 'onnx'): Promise<{ inference_code: string; fastapi_snippet: string }> {
   const res = await fetch(`${API_BASE}/export/code/${task}?format=${format}`);
   if (!res.ok) throw new Error(`Failed to fetch code: ${res.statusText}`);

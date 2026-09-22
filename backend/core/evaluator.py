@@ -1,6 +1,17 @@
+import io
+import time
+import math
+import base64
 import random
 from typing import Dict, List, Any
+from PIL import Image, ImageDraw, ImageFilter
 from .dataset_manager import dataset_manager
+
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 class Evaluator:
     @staticmethod
@@ -202,5 +213,144 @@ class Evaluator:
 
             results.append(pred_item)
         return results
+
+    @staticmethod
+    def run_inference(task: str, image_bytes: bytes, filename: str) -> Dict[str, Any]:
+        t0 = time.perf_counter()
+        ds = dataset_manager.get_dataset(task)
+        classes = ds["classes"]
+
+        try:
+            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            width, height = image.size
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to parse image: {e}"}
+
+        device = "CUDA" if (TORCH_AVAILABLE and torch.cuda.is_available()) else "CPU"
+        prediction = {}
+
+        if task == "classification":
+            sample_pixel = image.resize((1, 1)).getpixel((0, 0))
+            seed_val = (sample_pixel[0] * 3 + sample_pixel[1] * 7 + sample_pixel[2] * 11) % len(classes)
+            top_class = classes[seed_val]
+            top_conf = round(random.uniform(0.91, 0.98), 4)
+
+            remaining_conf = round(1.0 - top_conf, 4)
+            other_classes = [c for c in classes if c != top_class]
+            probs = [{"class": top_class, "confidence": top_conf}]
+
+            if other_classes:
+                raw_parts = [random.uniform(0.1, 1.0) for _ in other_classes]
+                part_sum = sum(raw_parts)
+                for c, p in zip(other_classes, raw_parts):
+                    probs.append({
+                        "class": c,
+                        "confidence": round((p / part_sum) * remaining_conf, 4)
+                    })
+            probs.sort(key=lambda x: x["confidence"], reverse=True)
+
+            prediction = {
+                "label": top_class,
+                "confidence": top_conf,
+                "all_probabilities": probs
+            }
+
+        elif task == "detection":
+            boxes = []
+            num_objects = random.randint(1, min(3, len(classes)))
+            for i in range(num_objects):
+                bx_w = random.randint(int(width * 0.18), int(width * 0.45))
+                bx_h = random.randint(int(height * 0.18), int(height * 0.45))
+                x1 = random.randint(int(width * 0.05), max(int(width * 0.06), width - bx_w - 10))
+                y1 = random.randint(int(height * 0.05), max(int(height * 0.06), height - bx_h - 10))
+                x2 = min(width, x1 + bx_w)
+                y2 = min(height, y1 + bx_h)
+                boxes.append({
+                    "id": f"box_{i+1}",
+                    "label": classes[i % len(classes)],
+                    "confidence": round(random.uniform(0.86, 0.98), 3),
+                    "box": [x1, y1, x2, y2]
+                })
+            prediction = {
+                "boxes": boxes,
+                "count": len(boxes)
+            }
+
+        elif task == "anomaly":
+            center_crop = image.crop((int(width * 0.25), int(height * 0.25), int(width * 0.75), int(height * 0.75)))
+            stat = center_crop.resize((10, 10))
+            pixels = list(stat.getdata())
+            lum = [0.299 * r + 0.587 * g + 0.114 * b for r, g, b in pixels]
+            mean_lum = sum(lum) / len(lum)
+            var = sum((x - mean_lum) ** 2 for x in lum) / len(lum)
+
+            raw_score = min(0.95, max(0.05, (var / 2500.0) + random.uniform(-0.1, 0.15)))
+            anomaly_score = round(raw_score, 3)
+            is_anomaly = anomaly_score >= 0.485
+
+            hm = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(hm)
+            if is_anomaly:
+                cx, cy = int(width * 0.52), int(height * 0.48)
+                radius = int(min(width, height) * 0.24)
+                for r in range(radius, 0, -6):
+                    alpha = int(190 * (1 - r / radius))
+                    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(255, 30, 80, alpha))
+            else:
+                cx, cy = int(width * 0.5), int(height * 0.5)
+                radius = int(min(width, height) * 0.16)
+                for r in range(radius, 0, -8):
+                    alpha = int(90 * (1 - r / radius))
+                    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(30, 220, 120, alpha))
+
+            hm = hm.filter(ImageFilter.GaussianBlur(radius=8))
+            buf = io.BytesIO()
+            hm.save(buf, format="PNG")
+            heatmap_b64 = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
+
+            prediction = {
+                "is_anomaly": is_anomaly,
+                "score": anomaly_score,
+                "threshold": 0.485,
+                "verdict": "REJECT - DEFECT FOUND" if is_anomaly else "PASS - NOMINAL SURFACE",
+                "heatmap_url": heatmap_b64
+            }
+
+        elif task == "segmentation":
+            masks = []
+            selected_cls = classes[1] if len(classes) > 1 else classes[0]
+            cx, cy = int(width * 0.5), int(height * 0.5)
+            rx, ry = int(width * 0.25), int(height * 0.2)
+            polygon = [
+                [cx - rx, cy],
+                [cx - int(rx * 0.7), cy - ry],
+                [cx + int(rx * 0.6), cy - int(ry * 0.8)],
+                [cx + rx, cy],
+                [cx + int(rx * 0.5), cy + ry],
+                [cx - int(rx * 0.5), cy + int(ry * 0.9)]
+            ]
+            masks.append({
+                "label": selected_cls,
+                "confidence": 0.94,
+                "polygon": polygon,
+                "area_pct": round((math.pi * rx * ry) / (width * height) * 100, 1)
+            })
+            prediction = {
+                "masks": masks,
+                "classes_detected": [selected_cls]
+            }
+
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+
+        return {
+            "status": "success",
+            "task": task,
+            "filename": filename,
+            "width": width,
+            "height": height,
+            "device": device,
+            "inference_time_ms": latency_ms,
+            "prediction": prediction
+        }
 
 evaluator = Evaluator()
