@@ -146,18 +146,15 @@ async def upload_batch_images(
             file_path = task_dir / clean_name
             with open(file_path, "wb") as out_file:
                 shutil.copyfileobj(f.file, out_file)
-            item = dataset_manager.add_image_item(
-                task=task,
-                file_path=str(file_path),
-                filename=clean_name,
-                width=320,
-                height=320,
-                split=split,
-                label=label or dataset_manager.get_dataset(task)["classes"][0]
-            )
-            added_items.append(item)
+            added_items.append({
+                "file_path": str(file_path),
+                "filename": clean_name,
+                "split": split,
+                "label": label or dataset_manager.get_dataset(task)["classes"][0]
+            })
 
-    return {"status": "success", "count": len(added_items), "items": added_items}
+    created = dataset_manager.add_image_items_batch(task, added_items)
+    return {"status": "success", "count": len(created), "items": created}
 
 class LocalFolderImportRequest(BaseModel):
     folder_path: str
@@ -172,36 +169,25 @@ def import_local_folder(task: str, req: LocalFolderImportRequest):
     if not src_dir.exists() or not src_dir.is_dir():
         raise HTTPException(status_code=400, detail=f"Folder not found: {req.folder_path}")
 
-    task_dir = DATA_DIR / task
-    task_dir.mkdir(parents=True, exist_ok=True)
-
     valid_exts = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
-    imported = []
+    items_to_add = []
+    default_classes = dataset_manager.get_dataset(task)["classes"]
+
     for root, _, files in os.walk(src_dir):
+        parent_folder = Path(root).name
+        item_label = req.label or (parent_folder if parent_folder in default_classes else default_classes[0])
         for fname in files:
             if Path(fname).suffix.lower() in valid_exts:
                 src_file = Path(root) / fname
-                dst_file = task_dir / fname
-                shutil.copy2(src_file, dst_file)
+                items_to_add.append({
+                    "file_path": str(src_file),
+                    "filename": fname,
+                    "split": req.split,
+                    "label": item_label
+                })
 
-                # Check for class subfolder name if label not provided
-                parent_folder = Path(root).name
-                default_classes = dataset_manager.get_dataset(task)["classes"]
-                item_label = req.label or (parent_folder if parent_folder in default_classes else default_classes[0])
-
-                item = dataset_manager.add_image_item(
-                    task=task,
-                    file_path=str(dst_file),
-                    filename=fname,
-                    width=320,
-                    height=320,
-                    split=req.split,
-                    label=item_label
-                )
-                imported.append(item)
-
-    dataset_manager.save_metadata()
-    return {"status": "success", "count": len(imported), "items": imported}
+    created = dataset_manager.add_image_items_batch(task, items_to_add)
+    return {"status": "success", "count": len(created)}
 
 @app.put("/api/dataset/{task}/items/{item_id}")
 def update_item(task: str, item_id: str, req: UpdateAnnotationRequest):
@@ -317,7 +303,11 @@ def download_export(filename: str):
 def serve_image(task: str, filename: str):
     path = DATA_DIR / task / filename
     if not path.exists():
-        raise HTTPException(status_code=404, detail="Image not found")
+        item = dataset_manager.find_item_by_filename(task, filename)
+        if item and Path(item["file_path"]).exists():
+            path = Path(item["file_path"])
+        else:
+            raise HTTPException(status_code=404, detail="Image not found")
     media_type = "image/png"
     if filename.lower().endswith(".jpg") or filename.lower().endswith(".jpeg"):
         media_type = "image/jpeg"

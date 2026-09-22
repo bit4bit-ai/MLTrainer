@@ -61,11 +61,21 @@ export const DatasetUploader: React.FC<DatasetUploaderProps> = ({
       setUploading(true);
       setErrorMsg(null);
       setSuccessMsg(null);
-      setProgressText(`Uploading ${selectedFiles.length} images...`);
+      const CHUNK_SIZE = 50;
+      let totalImported = 0;
+      const totalBatches = Math.ceil(selectedFiles.length / CHUNK_SIZE);
 
       try {
-        const res = await uploadBatchImages(task, selectedFiles, split, label);
-        setSuccessMsg(`Successfully imported ${res.count} images from folder "${folderName}"!`);
+        for (let i = 0; i < selectedFiles.length; i += CHUNK_SIZE) {
+          const chunk = selectedFiles.slice(i, i + CHUNK_SIZE);
+          const currentBatch = Math.floor(i / CHUNK_SIZE) + 1;
+          setProgressText(`Uploading batch ${currentBatch} of ${totalBatches} (${totalImported} / ${selectedFiles.length} images)...`);
+          
+          const res = await uploadBatchImages(task, chunk, split, label);
+          totalImported += res.count || chunk.length;
+        }
+
+        setSuccessMsg(`Successfully imported ${totalImported} images from folder "${folderName}"!`);
         setSelectedFiles([]);
         setFolderName('');
         setTimeout(() => {
@@ -235,6 +245,11 @@ export const DatasetUploader: React.FC<DatasetUploaderProps> = ({
                   <div style={{ fontSize: '0.85rem', color: '#34d399', fontWeight: 600 }}>
                     ✓ Found {selectedFiles.length} image files ready to import
                   </div>
+                  {selectedFiles.length > 500 && (
+                    <div style={{ fontSize: '0.75rem', color: '#38bdf8', marginTop: '6px', background: 'rgba(6, 182, 212, 0.1)', padding: '6px 10px', borderRadius: '6px' }}>
+                      💡 Tip: For large folders (e.g. 10,000 - 50,000 images), the <strong>"Direct Folder Path"</strong> tab above imports them in 2 seconds directly from disk!
+                    </div>
+                  )}
                   <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '6px' }}>
                     Click again to choose a different folder
                   </div>

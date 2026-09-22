@@ -104,11 +104,10 @@ class DatasetManager:
         self.save_metadata()
         return deleted_count
 
-    def add_image_item(self, task: str, file_path: str, filename: str, width: int, height: int, split: str = "train", **kwargs) -> Dict[str, Any]:
+    def add_image_item(self, task: str, file_path: str, filename: str, width: int, height: int, split: str = "train", auto_save: bool = True, **kwargs) -> Dict[str, Any]:
         item_id = str(uuid.uuid4())[:8]
         ds = self.get_dataset(task)
-        
-        # default annotation based on task
+
         default_label = kwargs.get("label", ds["classes"][0])
         boxes = kwargs.get("boxes", [])
         segmentation = kwargs.get("segmentation", [])
@@ -131,8 +130,51 @@ class DatasetManager:
             "heatmap_url": kwargs.get("heatmap_url", None)
         }
         ds["items"].append(item)
-        self.save_metadata()
+        if auto_save:
+            self.save_metadata()
         return item
+
+    def add_image_items_batch(self, task: str, items_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        ds = self.get_dataset(task)
+        created_items = []
+        for d in items_data:
+            item_id = str(uuid.uuid4())[:8]
+            file_path = d["file_path"]
+            filename = d.get("filename", Path(file_path).name)
+            item = {
+                "id": item_id,
+                "filename": filename,
+                "file_path": file_path,
+                "url": f"/api/images/{task}/{Path(file_path).name}",
+                "width": d.get("width", 320),
+                "height": d.get("height", 320),
+                "split": d.get("split", "train"),
+                "label": d.get("label", ds["classes"][0]),
+                "boxes": d.get("boxes", []),
+                "segmentation": d.get("segmentation", []),
+                "is_anomaly": d.get("is_anomaly", False),
+                "anomaly_score": d.get("anomaly_score", 0.0),
+                "heatmap_url": d.get("heatmap_url", None)
+            }
+            ds["items"].append(item)
+            created_items.append(item)
+        # Single write for the entire batch
+        self.save_metadata()
+        return created_items
+
+    def find_item_by_filename(self, task: str, filename: str) -> Optional[Dict[str, Any]]:
+        ds = self.get_dataset(task)
+        if not hasattr(self, "_filename_cache"):
+            self._filename_cache = {}
+        if task not in self._filename_cache or len(self._filename_cache[task]) != len(ds["items"]):
+            # Build fast lookup map
+            cache_map = {}
+            for item in ds["items"]:
+                cache_map[item["filename"]] = item
+                if "file_path" in item:
+                    cache_map[Path(item["file_path"]).name] = item
+            self._filename_cache[task] = cache_map
+        return self._filename_cache[task].get(filename)
 
     def ensure_demo_datasets(self):
         """Generates rich, visual demo datasets for each task if empty."""
